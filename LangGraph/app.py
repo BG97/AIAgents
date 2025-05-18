@@ -13,6 +13,7 @@ async def process_message(search, username, message, success_criteria, history):
     filter_messages(results)
     print(results)
     return results, search
+
 async def reset():
     new_search = Search()
     await new_search.setup()
@@ -28,18 +29,16 @@ def free_resources(search):
 
 
 def filter_messages(results):
-    """直接移除最后一条AI消息（Evaluator消息）"""
-    
     if not results:
         return results
     
-    # 找出所有AI消息的索引
     ai_indices = [i for i, msg in enumerate(results) if msg.get('role') == 'assistant']
     
-    # 如果有AI消息，移除最后一条
     if ai_indices:
         last_ai_index = ai_indices[-1]
-        results.pop(last_ai_index)
+        last_ai_message = results[last_ai_index]
+        if "Evaluator Feedback" in last_ai_message.get('content', ''):
+            results.pop(last_ai_index)
     
     return results
 
