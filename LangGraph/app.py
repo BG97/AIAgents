@@ -1,6 +1,6 @@
 import gradio as gr
 from search import Search
-
+from langchain_core.messages import AIMessage
 
 async def setup():
     search = Search()
@@ -9,8 +9,10 @@ async def setup():
 
 async def process_message(search, username, message, success_criteria, history):
     results = await search.run_superstep(message, username, success_criteria, history)
-    return results, search
     
+    filter_messages(results)
+    print(results)
+    return results, search
 async def reset():
     new_search = Search()
     await new_search.setup()
@@ -25,12 +27,28 @@ def free_resources(search):
         print(f"Exception during cleanup: {e}")
 
 
-with gr.Blocks(title="Search", theme=gr.themes.Default(primary_hue="emerald")) as ui:
-    gr.Markdown("## Search Personal Co-Worker")
-    search = gr.State(delete_callback=free_resources)
+def filter_messages(results):
+    """直接移除最后一条AI消息（Evaluator消息）"""
     
+    if not results:
+        return results
+    
+    # 找出所有AI消息的索引
+    ai_indices = [i for i, msg in enumerate(results) if msg.get('role') == 'assistant']
+    
+    # 如果有AI消息，移除最后一条
+    if ai_indices:
+        last_ai_index = ai_indices[-1]
+        results.pop(last_ai_index)
+    
+    return results
+
+with gr.Blocks(title="Search", theme=gr.themes.Default(primary_hue="emerald")) as ui:
+    gr.Markdown("## SearchOps_Assistant")
+    search = gr.State(delete_callback=free_resources)
+
     with gr.Row():
-        chatbot = gr.Chatbot(label="Search", height=300, type="messages")
+        chatbot = gr.Chatbot(label="Search", height=500, type="messages")
     with gr.Group():
         with gr.Row():
             username = gr.Textbox(show_label=False, placeholder="Enter your username")

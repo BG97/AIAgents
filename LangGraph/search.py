@@ -25,6 +25,7 @@ class State(TypedDict):
     success_criteria_met: bool
     user_input_needed: bool
     tool_name: Optional[str] 
+    #query_text: Optional[str]
 
 class EvaluatorOutput(BaseModel):
     feedback: str = Field(description="Feedback on the assistant's response")
@@ -66,27 +67,35 @@ class Search:
             return new_state
 
         system_message = f"""You are a helpful assistant that can use tools to complete tasks.
-    You keep working on a task until either you have a question or clarification for the user, or the success criteria is met.
-    You have many tools to help you, including tools to browse the internet, navigating and retrieving web pages.
-    You have a tool to run python code, but note that you would need to include a print() statement if you wanted to receive output.
-    The username is {state['username']}The current date and time is {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                            You keep working on a task until either you have a question or clarification for the user, or the success criteria is met.
 
-    This is the success criteria:
-    {state['success_criteria']}
-    You should reply either with a question for the user about this assignment, or with your final response.
-    If you have a question for the user, you need to reply by clearly stating your question. An example might be:
+                            You have many tools to help you, including tools to query the user's search history, browse the internet, navigating and retrieving web pages.
+                            You have a tool to run python code, but note that you would need to include a print() statement if you wanted to receive output.
 
-    Question: please clarify whether you want a summary or a detailed answer
+                            The username is {state["username"]}    The current date and time is {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
-    If you've finished, reply with the final answer, and don't ask a question; simply reply with the answer.
-    """
-        
+                            This is the success criteria:
+                            {state['success_criteria']}
+
+                            IMPORTANT GUIDELINE:
+                            - When the user asks about their search history (like entries, timestamps, or other database queries), simply pass their request to the get_user_history tool.
+                            - DO NOT break down a single history request into multiple separate tool calls.
+                            - Let the specialized tools handle the interpretation of natural language queries into database operations.
+
+                            You should reply either with a question for the user about this assignment, or with your final response.
+                            If you have a question for the user, you need to reply by clearly stating your question. An example might be:
+
+                            Question: please clarify whether you want a summary or a detailed answer
+
+                            If you've finished, reply with the final answer, and don't ask a question; simply reply with the answer.
+                            """
+                    
         if state.get("feedback_on_work"):
             system_message += f"""
-    Previously you thought you completed the assignment, but your reply was rejected because the success criteria was not met.
-    Here is the feedback on why this was rejected:
-    {state['feedback_on_work']}
-    With this feedback, please continue the assignment, ensuring that you meet the success criteria or have a question for the user."""
+                Previously you thought you completed the assignment, but your reply was rejected because the success criteria was not met.
+                Here is the feedback on why this was rejected:
+                {state['feedback_on_work']}
+                With this feedback, please continue the assignment, ensuring that you meet the success criteria or have a question for the user."""
         
         # Add in the system message
 
@@ -182,102 +191,31 @@ class Search:
                     state['username'],
                     self.search_id,
                     state['feedback_on_work'],
-                    state["messages"][-1].content
+                    state["messages"][-2].content
                 )
-            return "END"
+            print(state["messages"])
+            return "format_final_output"
         else:
             return "worker"
 
-    def sqlformator(self, state: State) -> Dict[str, Any]:
-        """
-        A node that completely replaces the state with just the formatted table
-        """
-        print("SQL Formatter activated, completely replacing history with formatted table")
-        
-        # Get the last message which should contain the JSON data
-        last_message = state["messages"][-1]
-        original_message = None
-        
-        # Find the original user request for search history
-        for msg in state["messages"]:
-            if isinstance(msg, HumanMessage) and "search history" in msg.content.lower():
-                original_message = msg
-                break
-        
-        # If no request found, use a generic one
-        if not original_message:
-            original_message = HumanMessage(content="give me the search history")
-        
-        # Format the JSON data
-        try:
-            # Parse JSON to ensure we have valid data
-            import json
-            json_data = json.loads(last_message.content)
-            
-            # Create system message for the formatting LLM
-            system_message = """You are a data formatting specialist. Format the provided JSON data as a clean ASCII table.
-            ONLY return the formatted table, nothing else. Do not reference or include the original JSON."""
-            
-            # Create formatting prompt
-            user_message = f"""Format this JSON data as a readable ASCII table:
-
-            {last_message.content}
-            
-            Create a table with these columns: ID, Thread ID, Username, Timestamp
-            Truncate long values for readability.
-            ONLY return the formatted table, nothing else."""
-            
-            # Create a new LLM instance for formatting
-            formatting_llm = ChatOpenAI(model="gpt-4o-mini")
-            
-            # Get formatted response
-            formatting_response = formatting_llm.invoke([
-                SystemMessage(content=system_message),
-                HumanMessage(content=user_message)
-            ])
-            
-            # Create an enhanced formatted response
-            formatted_table = "# Search History Results\n\n" + formatting_response.content
-            
-        except Exception as e:
-            print(f"Error formatting table: {e}")
-            formatted_table = f"Error formatting search history: {str(e)}"
-        
-        # Create completely new state with minimal message history
-        # This is the key part - we're replacing the entire message history
-        new_state = {
-            "messages": [
-                SystemMessage(content="SQL assistant."),
-                original_message,  # Original user request
-                AIMessage(content=formatted_table)  # Only the formatted table
-            ],
-            "username": state["username"],
-            "success_criteria": state["success_criteria"],
-            "feedback_on_work": None,  # Reset feedback
-            "success_criteria_met": True,  # Mark as completed
-            "user_input_needed": False,
-            "tool_name": None  # Reset tool name
-        }
-        
-        return new_state
+   
     
     def route_based_on_tools(self, state: State) -> str:
         last_message = state["messages"][-1]
         print("Tool output:", last_message.content)
-        
-        print("State keys:", list(state.keys()))
         
         tool_name = state.get("tool_name")
         print("Tool name detected:", tool_name)
         
         if tool_name == "get_user_history":
             if not state.get("username") or state["username"].strip() == "":
-                print("Username not provided, search history access denied")
+
                 # Add a message to state explaining why access is denied
                 state["messages"].append(AIMessage(content="Error: Username is required to access search history. Please provide a username."))
                 return "END"  # End the flow with error message
-            print("Detected get_user_history tool, routing to SQL formatter")
-            return "sqlformator"
+            
+            print("Detected get_user_history tool, routing to END")
+            return "END"
         else:
             print("Routing to worker")
             return "worker"
@@ -294,6 +232,24 @@ class Search:
         conn.commit()
         conn.close()
 
+    def format_final_output(self,state: State) -> Dict[str, Any]:
+
+            
+        messages = state["messages"]
+        new_messages = []
+        
+        for msg in reversed(messages):
+            if (isinstance(msg, AIMessage) and 
+                not msg.content.startswith("Evaluator Feedback")):
+                new_messages = [msg]  
+                break
+        
+
+        new_state = dict(state)
+        new_state["messages"] = new_messages
+        return new_state
+    
+
     async def build_graph(self):
         # Set up Graph Builder with State
         graph_builder = StateGraph(State)
@@ -302,14 +258,13 @@ class Search:
         graph_builder.add_node("worker", self.worker)
         graph_builder.add_node("tools", ToolNode(tools=self.tools))
         graph_builder.add_node("evaluator", self.evaluator)
-        graph_builder.add_node("sqlformator", self.sqlformator)
+        graph_builder.add_node("format_final_output", self.format_final_output)
 
         # Add edges
         graph_builder.add_conditional_edges("worker", self.worker_router, {"tools": "tools", "evaluator": "evaluator"})
-        graph_builder.add_conditional_edges("tools", self.route_based_on_tools, {"worker": "worker", "sqlformator": 'sqlformator'})
-        graph_builder.add_edge("sqlformator", END)
-        graph_builder.add_conditional_edges("evaluator", self.route_based_on_evaluation, {"worker": "worker", "END": END})
-        
+        graph_builder.add_conditional_edges("tools", self.route_based_on_tools, {"worker": "worker", "END": END})
+        graph_builder.add_conditional_edges("evaluator", self.route_based_on_evaluation, {"worker": "worker", "format_final_output": 'format_final_output'})
+        graph_builder.add_edge("format_final_output",END)
         graph_builder.add_edge(START, "worker")
 
         # Compile the graph
@@ -332,27 +287,6 @@ class Search:
 
 
         user = {"role": "user", "content": message}
-
-        # For search history requests, find the formatted table response
-        if "search history" in message.lower():
-            formatted_table = None
-            for msg in reversed(result["messages"]):
-                content = msg.content if hasattr(msg, "content") else msg.get("content", "")
-                
-                # Look for a message that contains table formatting indicators
-                if any(marker in content for marker in ["|", "+-", "ID", "Thread ID", "Username", "Timestamp"]):
-                    formatted_table = content
-                    break
-            
-            if formatted_table:
-                reply = {"role": "assistant", "content": formatted_table}
-            else:
-                # Fallback to last message if no table found
-                reply = {"role": "assistant", "content": result["messages"][-1].content}
-        else:
-            # For non-search history requests, use normal processing
-            reply = {"role": "assistant", "content": result["messages"][-2].content}
-
         reply = {"role": "assistant", "content": result["messages"][-2].content}
         feedback = {"role": "assistant", "content": result["messages"][-1].content}
         
